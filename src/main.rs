@@ -187,6 +187,71 @@ async fn watch_completions(app: Shared) {
     }
 }
 
+const VIDEO: &[&str] = &["mkv", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "webm"];
+
+/// For torrents downloading in order, tells Ciniva which byte ranges of the main video file are on disk, so it can be
+/// watched while it downloads.
+async fn report_streamable(app: Shared) {
+    loop {
+        let mut items = vec![];
+        if let Ok(list) = app.qbit.torrents().await {
+            for t in list.iter().filter(|t| t.seq_dl && !t.complete()) {
+                match streamable(&app, t).await {
+                    Ok(Some(item)) => items.push(item),
+                    Ok(None) => {}
+                    Err(e) => tracing::debug!(name = %t.name, "cannot read pieces: {e:#}"),
+                }
+            }
+        }
+        let _ = app.ciniva_post("/api/downloads/report", json!({ "plugin": "qbittorrent", "items": items })).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+async fn streamable(app: &Shared, t: &qbit::Torrent) -> anyhow::Result<Option<Value>> {
+    let (files, props, states) = tokio::try_join!(app.qbit.files(&t.hash), app.qbit.properties(&t.hash), app.qbit.piece_states(&t.hash))?;
+    let piece = props.piece_size;
+    if piece <= 0 || files.is_empty() {
+        return Ok(None);
+    }
+    let mut offsets = vec![0i64; files.len()];
+    let mut sorted: Vec<&qbit::TorrentFile> = files.iter().collect();
+    sorted.sort_by_key(|f| f.index);
+    let mut acc = 0;
+    for f in &sorted {
+        if let Some(slot) = offsets.get_mut(f.index as usize) {
+            *slot = acc;
+        }
+        acc += f.size;
+    }
+    let is_video = |n: &str| n.rsplit('.').next().is_some_and(|e| VIDEO.contains(&e.to_ascii_lowercase().as_str()));
+    let Some(f) = files.iter().filter(|f| f.priority > 0 && is_video(&f.name)).max_by_key(|f| f.size) else { return Ok(None) };
+    let start = offsets.get(f.index as usize).copied().unwrap_or(0);
+    let end = start + f.size;
+    let mut ranges: Vec<(i64, i64)> = vec![];
+    let (first, last) = (f.piece_range.first().copied().unwrap_or(0), f.piece_range.get(1).copied().unwrap_or(-1));
+    for i in first.max(0)..=last {
+        if states.get(i as usize) != Some(&2) {
+            continue;
+        }
+        let (s, e) = ((i * piece).max(start) - start, ((i + 1) * piece).min(end) - start);
+        match ranges.last_mut() {
+            Some(r) if r.1 >= s => r.1 = r.1.max(e),
+            _ => ranges.push((s, e)),
+        }
+    }
+    let on_disk = format!("{}/{}{}", t.save_path.trim_end_matches('/'), f.name, if f.progress < 1.0 { ".!qB" } else { "" });
+    let Some(path) = app.cfg.to_ciniva(&on_disk) else { return Ok(None) };
+    Ok(Some(json!({
+        "id": format!("{}-{}", t.hash, f.index),
+        "title": t.name,
+        "path": path,
+        "size": f.size,
+        "ranges": ranges,
+        "progress": f.progress,
+    })))
+}
+
 async fn require_ciniva(State(app): State<Shared>, req: Request, next: Next) -> Response {
     let ok = !app.cfg.secret.is_empty() && req.headers().get("x-ciniva-secret").and_then(|v| v.to_str().ok()) == Some(app.cfg.secret.as_str());
     if ok {
@@ -243,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     tokio::spawn(watch_completions(app.clone()));
+    tokio::spawn(report_streamable(app.clone()));
 
     let ui_routes = Router::new()
         .route("/ui/pages/{page}", get(page))

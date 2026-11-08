@@ -140,7 +140,7 @@ async fn downloads(app: &Shared) -> Value {
             { "type": "form", "id": "add", "fields": [
                 { "name": "source", "label": "Magnet link or torrent URL", "kind": "text", "placeholder": "magnet:?xt=urn:btih:…" },
                 { "name": "torrent", "label": "…or a .torrent file", "kind": "file" },
-                { "name": "watch", "label": "Download in order", "kind": "toggle", "help": "Sequential, so playback can start sooner" },
+                { "name": "watch", "label": "Download & watch", "kind": "toggle", "help": "Downloads in order so you can start watching in Ciniva right away" },
             ], "submit": { "label": "Add download", "call": op("POST", "add", json!({})) } },
             { "type": "list", "items": items, "empty": "No torrents yet." },
         ]
@@ -270,7 +270,7 @@ async fn search_page(app: &Shared, q: &HashMap<String, String>) -> Value {
                 "badges": badges,
                 "actions": [
                     { "label": "Download", "tone": "primary", "call": op("POST", "grab", json!({ "link": link, "watch": false, "title": r.title })) },
-                    { "label": "Download in order", "call": op("POST", "grab", json!({ "link": link, "watch": true, "title": r.title })) },
+                    { "label": "Download & watch", "call": op("POST", "grab", json!({ "link": link, "watch": true, "title": r.title })) },
                 ],
             })
         })

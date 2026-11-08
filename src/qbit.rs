@@ -54,6 +54,8 @@ pub struct TorrentFile {
     pub size: i64,
     pub progress: f64,
     pub priority: i64,
+    #[serde(default)]
+    pub piece_range: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -78,6 +80,8 @@ pub struct Properties {
     pub addition_date: i64,
     #[serde(default)]
     pub comment: String,
+    #[serde(default)]
+    pub piece_size: i64,
 }
 
 pub struct NewTorrent {
@@ -131,6 +135,11 @@ impl Qbit {
 
     pub async fn properties(&self, hash: &str) -> Result<Properties> {
         self.get("torrents/properties", &[("hash", hash)]).await
+    }
+
+    /// Per piece: 0 not downloaded, 1 downloading, 2 complete.
+    pub async fn piece_states(&self, hash: &str) -> Result<Vec<u8>> {
+        self.get("torrents/pieceStates", &[("hash", hash)]).await
     }
 
     pub async fn transfer(&self) -> Result<Transfer> {
