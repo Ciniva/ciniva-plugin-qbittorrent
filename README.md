@@ -12,6 +12,10 @@ The plugin protocol is described in Ciniva's `docs/plugins.md`.
 `ghcr.io/ciniva/ciniva-plugin-qbittorrent` (built by GitHub Actions on every push to `main`; tags `latest`,
 `sha-<short>`, and `X.Y.Z` for `vX.Y.Z` tags).
 
+This repository also builds `ghcr.io/ciniva/qbittorrent` from [`qbittorrent/`](qbittorrent/Dockerfile): the static
+qbittorrent-nox release, pinned and checksum-verified, running as 1000:1000 with no setuid binaries and a read-only
+root filesystem. The two images are released together so the plugin always matches the qBittorrent API it talks to.
+
 ## Configuration
 
 | Variable | Default | |
