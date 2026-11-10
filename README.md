@@ -15,6 +15,8 @@ The plugin protocol is described in Ciniva's `docs/plugins.md`.
 This repository also builds `ghcr.io/ciniva/qbittorrent` from [`qbittorrent/`](qbittorrent/Dockerfile): the static
 qbittorrent-nox release, pinned and checksum-verified, running as 1000:1000 with no setuid binaries and a read-only
 root filesystem. The two images are released together so the plugin always matches the qBittorrent API it talks to.
+On first start (no `qBittorrent.conf` in `/config` yet) it writes a default config with the `.!qB` suffix for
+incomplete files turned off, so Ciniva indexes episodes while they download. An existing config is never changed.
 
 ## Configuration
 

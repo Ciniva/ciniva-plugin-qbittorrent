@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && useradd --uid ${UID} --gid ${GID} --no-create-home --home-dir /config --shell /usr/sbin/nologin qbittorrent \
  && { find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true; }
 COPY --from=fetch /qbittorrent-nox /usr/local/bin/qbittorrent-nox
+COPY --chmod=0644 qBittorrent.conf /defaults/qBittorrent.conf
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 ENV HOME=/config
 USER qbittorrent:qbittorrent
 VOLUME ["/config"]
 EXPOSE 8080 61464 61464/udp
-ENTRYPOINT ["/usr/local/bin/qbittorrent-nox", "--profile=/config", "--webui-port=8080", "--confirm-legal-notice"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
