@@ -9,8 +9,8 @@ The plugin protocol is described in Ciniva's `docs/plugins.md`.
 
 ## Image
 
-`ghcr.io/ciniva/ciniva-plugin-qbittorrent` (built by GitHub Actions on every push to `main`; tags `latest`,
-`sha-<short>`, and `X.Y.Z` for `vX.Y.Z` tags).
+`ghcr.io/ciniva/ciniva-plugin-qbittorrent` (published by GitHub Actions for `vX.Y.Z` tags matching `Cargo.toml` as
+`X.Y.Z`, `latest` and `sha-<short>`; run the workflow by hand to publish any branch as `sha-<short>`).
 
 This repository also builds `ghcr.io/ciniva/qbittorrent` from [`qbittorrent/`](qbittorrent/Dockerfile): the static
 qbittorrent-nox release, pinned and checksum-verified, running as 1000:1000 with no setuid binaries and a read-only
