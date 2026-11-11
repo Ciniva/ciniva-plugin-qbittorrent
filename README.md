@@ -3,7 +3,8 @@
 Adds a **Downloads** page to [Ciniva](https://github.com/Ciniva/ciniva): live progress, add magnet/URL/`.torrent`,
 pause/resume, sequential ("download in order"), per-file priorities, Prowlarr search ranked by preferred quality,
 languages and size, and "Find episodes" / "Find releases" on show, season and movie pages. When a download finishes it
-asks Ciniva to rescan just that folder and notifies signed-in clients.
+asks Ciniva to rescan just that folder and notifies signed-in clients. While files download it reports which parts are
+on disk, so Ciniva's library can play them and wait for the rest.
 
 The plugin protocol is described in Ciniva's `docs/plugins.md`.
 

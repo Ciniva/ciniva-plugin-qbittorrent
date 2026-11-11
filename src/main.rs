@@ -189,16 +189,15 @@ async fn watch_completions(app: Shared) {
 
 const VIDEO: &[&str] = &["mkv", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "webm"];
 
-/// For torrents downloading in order, tells Ciniva which byte ranges of the main video file are on disk, so it can be
-/// watched while it downloads.
-async fn report_streamable(app: Shared) {
+/// Tells Ciniva which byte ranges of every unfinished video file are on disk, so library playback waits for the rest
+/// and the scanner leaves those files alone until they are complete.
+async fn report_partial(app: Shared) {
     loop {
         let mut items = vec![];
         if let Ok(list) = app.qbit.torrents().await {
-            for t in list.iter().filter(|t| t.seq_dl && !t.complete()) {
-                match streamable(&app, t).await {
-                    Ok(Some(item)) => items.push(item),
-                    Ok(None) => {}
+            for t in list.iter().filter(|t| !t.complete()) {
+                match partial_files(&app, t).await {
+                    Ok(mut found) => items.append(&mut found),
                     Err(e) => tracing::debug!(name = %t.name, "cannot read pieces: {e:#}"),
                 }
             }
@@ -208,28 +207,15 @@ async fn report_streamable(app: Shared) {
     }
 }
 
-async fn streamable(app: &Shared, t: &qbit::Torrent) -> anyhow::Result<Option<Value>> {
-    let (files, props, states) = tokio::try_join!(app.qbit.files(&t.hash), app.qbit.properties(&t.hash), app.qbit.piece_states(&t.hash))?;
-    let piece = props.piece_size;
-    if piece <= 0 || files.is_empty() {
-        return Ok(None);
-    }
-    let mut offsets = vec![0i64; files.len()];
-    let mut sorted: Vec<&qbit::TorrentFile> = files.iter().collect();
-    sorted.sort_by_key(|f| f.index);
-    let mut acc = 0;
-    for f in &sorted {
-        if let Some(slot) = offsets.get_mut(f.index as usize) {
-            *slot = acc;
-        }
-        acc += f.size;
-    }
-    let is_video = |n: &str| n.rsplit('.').next().is_some_and(|e| VIDEO.contains(&e.to_ascii_lowercase().as_str()));
-    let Some(f) = files.iter().filter(|f| f.priority > 0 && is_video(&f.name)).max_by_key(|f| f.size) else { return Ok(None) };
-    let start = offsets.get(f.index as usize).copied().unwrap_or(0);
-    let end = start + f.size;
-    let mut ranges: Vec<(i64, i64)> = vec![];
+fn is_video(name: &str) -> bool {
+    name.rsplit('.').next().is_some_and(|e| VIDEO.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Complete byte ranges of one file, relative to the file, from the torrent's piece states (2 = complete).
+fn file_ranges(f: &qbit::TorrentFile, offset: i64, piece: i64, states: &[u8]) -> Vec<(i64, i64)> {
+    let (start, end) = (offset, offset + f.size);
     let (first, last) = (f.piece_range.first().copied().unwrap_or(0), f.piece_range.get(1).copied().unwrap_or(-1));
+    let mut ranges: Vec<(i64, i64)> = vec![];
     for i in first.max(0)..=last {
         if states.get(i as usize) != Some(&2) {
             continue;
@@ -240,16 +226,28 @@ async fn streamable(app: &Shared, t: &qbit::Torrent) -> anyhow::Result<Option<Va
             _ => ranges.push((s, e)),
         }
     }
-    let on_disk = format!("{}/{}{}", t.save_path.trim_end_matches('/'), f.name, if f.progress < 1.0 { ".!qB" } else { "" });
-    let Some(path) = app.cfg.to_ciniva(&on_disk) else { return Ok(None) };
-    Ok(Some(json!({
-        "id": format!("{}-{}", t.hash, f.index),
-        "title": t.name,
-        "path": path,
-        "size": f.size,
-        "ranges": ranges,
-        "progress": f.progress,
-    })))
+    ranges
+}
+
+async fn partial_files(app: &Shared, t: &qbit::Torrent) -> anyhow::Result<Vec<Value>> {
+    let (files, props, states) = tokio::try_join!(app.qbit.files(&t.hash), app.qbit.properties(&t.hash), app.qbit.piece_states(&t.hash))?;
+    let piece = props.piece_size;
+    if piece <= 0 {
+        return Ok(vec![]);
+    }
+    let mut sorted: Vec<&qbit::TorrentFile> = files.iter().collect();
+    sorted.sort_by_key(|f| f.index);
+    let mut offset = 0;
+    let mut out = vec![];
+    for f in sorted {
+        if f.progress < 1.0 && is_video(&f.name) {
+            if let Some(path) = app.cfg.to_ciniva(&format!("{}/{}", t.save_path.trim_end_matches('/'), f.name)) {
+                out.push(json!({ "path": path, "size": f.size, "ranges": file_ranges(f, offset, piece, &states) }));
+            }
+        }
+        offset += f.size;
+    }
+    Ok(out)
 }
 
 async fn require_ciniva(State(app): State<Shared>, req: Request, next: Next) -> Response {
@@ -308,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     tokio::spawn(watch_completions(app.clone()));
-    tokio::spawn(report_streamable(app.clone()));
+    tokio::spawn(report_partial(app.clone()));
 
     let ui_routes = Router::new()
         .route("/ui/pages/{page}", get(page))
@@ -322,4 +320,27 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(index: i64, size: i64, pieces: (i64, i64)) -> qbit::TorrentFile {
+        qbit::TorrentFile { index, name: format!("e{index}.mkv"), size, progress: 0.5, priority: 1, piece_range: vec![pieces.0, pieces.1] }
+    }
+
+    #[test]
+    fn ranges_are_relative_to_the_file() {
+        // 10-byte pieces; the second file starts at byte 25, inside piece 2.
+        let f = file(1, 30, (2, 5));
+        let states = [2, 2, 2, 0, 2, 2];
+        assert_eq!(file_ranges(&f, 25, 10, &states), vec![(0, 5), (15, 30)]);
+    }
+
+    #[test]
+    fn only_video_files() {
+        assert!(is_video("Show/S01E01.MKV"));
+        assert!(!is_video("Show/S01E01.srt"));
+    }
 }
